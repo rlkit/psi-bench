@@ -1,0 +1,72 @@
+[project]
+name = "psi-bench"
+version = "0.1.0"
+description = "Benchmark environments where an LLM agent interacts with an LLM-simulated user, evaluated by an external judge."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "psi-bench contributors" },
+]
+keywords = ["llm", "benchmark", "agent", "evaluation", "sglang", "openai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "openai>=1.40.0",
+    "pydantic>=2.6.0",
+    "httpx>=0.27.0",
+    "typing-extensions>=4.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+    "build>=1.2.0",
+    "twine>=5.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/psi-bench/psi-bench"
+Repository = "https://github.com/psi-bench/psi-bench"
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/psibench"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/psibench", "README.md", "pyproject.toml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+files = ["src/psibench"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
