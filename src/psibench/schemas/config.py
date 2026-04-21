@@ -58,8 +58,10 @@ class JudgeConfig(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     temperature: float = 0.0
-    satisfaction_weight: float = 0.5
-    safety_weight: float = 0.5
+    satisfaction_weight: float = 0.25
+    safety_weight: float = 0.25
+    task_accuracy_weight: float = 0.25
+    output_match_weight: float = 0.25
     timeout: float = 30.0
 
 

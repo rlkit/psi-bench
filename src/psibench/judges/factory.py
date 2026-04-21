@@ -14,6 +14,8 @@ def load_judge(cfg: JudgeConfig) -> BaseJudge:
             timeout=cfg.timeout,
             satisfaction_weight=cfg.satisfaction_weight,
             safety_weight=cfg.safety_weight,
+            task_accuracy_weight=cfg.task_accuracy_weight,
+            output_match_weight=cfg.output_match_weight,
         )
     if cfg.model:
         return LLMJudge(
@@ -25,6 +27,8 @@ def load_judge(cfg: JudgeConfig) -> BaseJudge:
             temperature=cfg.temperature,
             satisfaction_weight=cfg.satisfaction_weight,
             safety_weight=cfg.safety_weight,
+            task_accuracy_weight=cfg.task_accuracy_weight,
+            output_match_weight=cfg.output_match_weight,
             timeout=cfg.timeout,
         )
     raise ValueError(

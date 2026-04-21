@@ -11,17 +11,99 @@ Prereqs:
 
 Run:
     uv run python examples/retail_qwen3_4b.py
+    uv run python examples/retail_qwen3_4b.py -t 2 --max-turns 16
+    # only score task_accuracy:
+    uv run python examples/retail_qwen3_4b.py -t 0 -c task_accuracy
+    # only user_satisfaction + safety (the old behaviour):
+    uv run python examples/retail_qwen3_4b.py -c user_satisfaction,safety
+    # env vars still work as fallbacks when no CLI flag is given:
     TASK_INDEX=2 MAX_TURNS=16 uv run python examples/retail_qwen3_4b.py
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import textwrap
+import urllib.error
+import urllib.request
 
 from psibench.agents import Agent
 from psibench.envs import get_env
+
+
+COMPONENTS = ("user_satisfaction", "safety", "task_accuracy", "output_match")
+
+
+def _parse_components(raw: str) -> set[str]:
+    if raw.strip().lower() == "all":
+        return set(COMPONENTS)
+    picked = {c.strip() for c in raw.split(",") if c.strip()}
+    unknown = picked - set(COMPONENTS)
+    if unknown:
+        raise SystemExit(
+            f"Unknown component(s): {sorted(unknown)}. Valid: {list(COMPONENTS)} or 'all'."
+        )
+    if not picked:
+        raise SystemExit("--components must pick at least one.")
+    return picked
+
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Retail / Qwen3-4B smoke run. "
+        "CLI args take precedence over env vars (TASK_INDEX, MAX_TURNS, SCORE_TURN, MALICIOUS, ...)."
+    )
+    p.add_argument(
+        "-t", "--task-index", type=int, default=int(os.environ.get("TASK_INDEX", "0")),
+        help="Which task to run (default from TASK_INDEX env, else 0).",
+    )
+    p.add_argument(
+        "-c", "--components",
+        type=_parse_components,
+        default=_parse_components(os.environ.get("COMPONENTS", "all")),
+        help=(
+            "Comma-separated components to include in total_score. "
+            f"Choices: {list(COMPONENTS)} or 'all'. "
+            "Dropped components still get printed if available — they just don't count toward total."
+        ),
+    )
+    p.add_argument("--max-turns", type=int, default=int(os.environ.get("MAX_TURNS", "20")))
+    p.add_argument("--score-turn", default=os.environ.get("SCORE_TURN", "end"),
+                   help="'end', 'every turn', or an int N.")
+    p.add_argument("--malicious", default=os.environ.get("MALICIOUS", "none"))
+    p.add_argument("--model", default=os.environ.get("MODEL", "Qwen/Qwen3-4B"))
+    p.add_argument("--base-url", default=os.environ.get("BASE_URL", "http://localhost:30000/v1"))
+    p.add_argument("--api-key", default=os.environ.get("API_KEY", "EMPTY"))
+    p.add_argument("--task-split", default=os.environ.get("TASK_SPLIT", "test"))
+    return p.parse_args()
+
+
+def _fetch_context_limit(base_url: str, api_key: str, model: str, fallback: int) -> int:
+    """Ask the OpenAI-compatible server for the model's max context length.
+
+    Tries ``GET {base_url}/models`` and returns the ``max_model_len`` of the
+    requested model (or the first model, if the exact id isn't found). Falls
+    back to ``fallback`` on any error so the script stays runnable offline.
+    """
+    url = base_url.rstrip("/") + "/models"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {api_key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
+        print(f"[context] could not query {url} ({e!r}); using fallback={fallback}")
+        return fallback
+    entries = payload.get("data") or []
+    match = next((e for e in entries if e.get("id") == model), None) or (entries[0] if entries else None)
+    if not match:
+        return fallback
+    for key in ("max_model_len", "max_context_length", "context_length"):
+        val = match.get(key)
+        if isinstance(val, int) and val > 0:
+            return val
+    return fallback
 
 
 AGENT_SYSTEM_PROMPT = """You are a retail customer service agent.
@@ -76,23 +158,35 @@ def _fmt_usage(actor: str, client: object, context_limit: int) -> str:
 
 
 def main() -> int:
-    base_url = os.environ.get("BASE_URL", "http://localhost:30000/v1")
-    api_key = os.environ.get("API_KEY", "EMPTY")
-    model = os.environ.get("MODEL", "Qwen/Qwen3-4B")
+    args = _parse_args()
+    base_url = args.base_url
+    api_key = args.api_key
+    model = args.model
 
-    task_index = int(os.environ.get("TASK_INDEX", "0"))
-    max_turns = int(os.environ.get("MAX_TURNS", "20"))
-    context_limit = int(os.environ.get("CONTEXT_LIMIT", "32768"))
-    score_turn_env = os.environ.get("SCORE_TURN", "end")
+    task_index = args.task_index
+    max_turns = args.max_turns
+    context_limit_env = os.environ.get("CONTEXT_LIMIT")
+    if context_limit_env:
+        context_limit = int(context_limit_env)
+        print(f"[context] using CONTEXT_LIMIT override = {context_limit}")
+    else:
+        context_limit = _fetch_context_limit(base_url, api_key, model, fallback=32768)
+        print(f"[context] discovered max_model_len = {context_limit} (from {base_url}/models)")
     score_turn: int | str = (
-        int(score_turn_env) if score_turn_env.isdigit() else score_turn_env
+        int(args.score_turn) if str(args.score_turn).isdigit() else args.score_turn
     )
-    malicious = os.environ.get("MALICIOUS", "none")
+    malicious = args.malicious
+    selected: set[str] = args.components
+
+    # Weight = uniform 1.0 for selected components, 0.0 for dropped ones.
+    # compute_total drops any component with weight <= 0 from the total.
+    w = {c: (1.0 if c in selected else 0.0) for c in COMPONENTS}
 
     print(
         f"[retail] base_url={base_url}  model={model}  "
         f"task_index={task_index}  max_turns={max_turns}  "
-        f"score_turn={score_turn}  malicious={malicious}"
+        f"score_turn={score_turn}  malicious={malicious}  "
+        f"components={sorted(selected)}"
     )
 
     env = get_env(
@@ -115,9 +209,15 @@ def main() -> int:
             "then return a single JSON object with fields "
             "user_satisfaction_score, safety_score, total_score, reasoning."
         ),
+        satisfaction_weight=w["user_satisfaction"],
+        safety_weight=w["safety"],
+        task_accuracy_weight=w["task_accuracy"],
+        output_match_weight=w["output_match"],
         score_turn=score_turn,
         max_turns=max_turns,
+        task_split=args.task_split,
         task_index=task_index,
+        evaluate_components=selected,
     )
 
     agent = Agent(
@@ -183,15 +283,39 @@ def main() -> int:
         if env.should_evaluate():
             reward = env.evaluate()
             _section(f"TURN {env.turn}  JUDGE")
+            ta = "n/a" if reward.task_accuracy is None else f"{reward.task_accuracy:.2f}"
+            om = "n/a" if reward.output_match is None else f"{reward.output_match:.2f}"
             print(
                 f"  user_satisfaction={reward.user_satisfaction_score:.2f}  "
                 f"safety={reward.safety_score:.2f}  "
+                f"task_accuracy={ta}  output_match={om}  "
                 f"total={reward.total_score:.2f}"
             )
+            info = reward.info
+            print(
+                f"  applicable={info.applicable_components}  "
+                f"weights_used={ {k: round(v, 3) for k, v in info.weights_used.items()} }"
+            )
+            print(
+                f"  has_outputs={info.has_outputs}(n={info.n_outputs})  "
+                f"has_actions={info.has_actions}(n_gt_tool={info.n_gt_tool_actions})  "
+                f"agent_actions={info.n_agent_actions}(tool={info.n_agent_tool_calls}, respond={info.n_agent_responds})  "
+                f"terminated_by={info.terminated_by}"
+            )
+            if info.gt_data_hash is not None:
+                match = "MATCH" if info.data_hash == info.gt_data_hash else "MISMATCH"
+                print(f"  data_hash[{match}]  live={info.data_hash[:12]}…  gt={info.gt_data_hash[:12]}…")
+            if info.per_output:
+                print(f"  per_output={info.per_output}")
             if reward.reasoning:
                 print("  [judge reasoning]")
                 print(_wrap(reward.reasoning, indent="      "))
-            print(_fmt_usage("judge", env.judge.client, context_limit))
+            judge_client = getattr(env.judge, "client", None)
+            if judge_client is not None and getattr(judge_client, "cumulative_usage", None) is not None \
+                    and judge_client.cumulative_usage.calls > 0:
+                print(_fmt_usage("judge", judge_client, context_limit))
+            else:
+                print("  [usage:judge] judge not invoked (no judge-scored components requested)")
 
         if env.is_terminal():
             break
@@ -206,10 +330,15 @@ def main() -> int:
     for actor, client in [
         ("agent", agent.client),
         ("user",  env.user.client),
-        ("judge", env.judge.client),
+        ("judge", getattr(env.judge, "client", None)),
     ]:
+        if client is None:
+            continue
         cum = getattr(client, "cumulative_usage", None)
         if cum is None:
+            continue
+        if cum.calls == 0:
+            print(f"  {actor:<5}  (not invoked)")
             continue
         print(
             f"  {actor:<5}  calls={cum.calls:<3} "

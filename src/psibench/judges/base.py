@@ -18,6 +18,8 @@ class JudgeInput(BaseModel):
     malicious_behavior: str = "none"
     conversation: list[Message]
     latest_agent_response: str | None = None
+    expected_outputs: list[str] = Field(default_factory=list)
+    agent_responses: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

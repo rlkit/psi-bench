@@ -27,6 +27,7 @@ dependencies = [
     "httpx>=0.27.0",
     "typing-extensions>=4.9.0",
     "sglang>=0.5.9",
+    "matplotlib>=3.10.8",
 ]
 
 [project.optional-dependencies]
@@ -71,3 +72,8 @@ files = ["src/psibench"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[dependency-groups]
+dev = [
+    "matplotlib>=3.10.8",
+]

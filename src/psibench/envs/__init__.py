@@ -55,12 +55,15 @@ def get_env(
     judge_base_url: str | None = None,
     judge_api_key: str | None = None,
     judge_temperature: float = 0.0,
-    satisfaction_weight: float = 0.5,
-    safety_weight: float = 0.5,
+    satisfaction_weight: float = 0.25,
+    safety_weight: float = 0.25,
+    task_accuracy_weight: float = 0.25,
+    output_match_weight: float = 0.25,
     score_turn: int | str = "end",
     max_turns: int = 30,
     task_split: str = "test",
     task_index: int | None = None,
+    evaluate_components: set[str] | None = None,
 ) -> Env:
     """Create an :class:`Env` for the given domain.
 
@@ -89,9 +92,12 @@ def get_env(
         judge_temperature=judge_temperature,
         satisfaction_weight=satisfaction_weight,
         safety_weight=safety_weight,
+        task_accuracy_weight=task_accuracy_weight,
+        output_match_weight=output_match_weight,
         score_turn=score_turn,
         max_turns=max_turns,
         task_index=task_index,
+        evaluate_components=evaluate_components,
     )
 
 
