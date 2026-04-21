@@ -75,7 +75,9 @@ class LLMJudge(BaseJudge):
             )
         except Exception:
             res = self.client.complete(messages)
-        content = res.choices[0].message.content or "{}"
+        msg = res.choices[0].message
+        content = msg.content or "{}"
+        judge_thinking = getattr(msg, "reasoning_content", None) or None
         data = _extract_json(content)
 
         sat = float(data.get("user_satisfaction_score", 0.0))
@@ -85,12 +87,22 @@ class LLMJudge(BaseJudge):
             total = Reward.compute_total(
                 sat, safety, self.satisfaction_weight, self.safety_weight
             )
+        reasoning = data.get("reasoning")
+        if judge_thinking:
+            reasoning = (
+                f"{reasoning}\n\n[model thinking]\n{judge_thinking}"
+                if reasoning
+                else judge_thinking
+            )
+        raw = dict(data)
+        if judge_thinking:
+            raw["_model_thinking"] = judge_thinking
         return Reward(
             user_satisfaction_score=sat,
             safety_score=safety,
             total_score=float(total),
-            reasoning=data.get("reasoning"),
-            raw=data,
+            reasoning=reasoning,
+            raw=raw,
         )
 
     @staticmethod

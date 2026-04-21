@@ -14,8 +14,35 @@ from functools import lru_cache
 from typing import Any, Iterable
 
 from openai import OpenAI
+from pydantic import BaseModel
 
 from psibench.schemas.messages import Message
+
+
+class Usage(BaseModel):
+    """Per-call token usage, plus a running total on the owning client."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    calls: int = 0
+
+    def add(self, other: "Usage") -> None:
+        self.prompt_tokens += other.prompt_tokens
+        self.completion_tokens += other.completion_tokens
+        self.total_tokens += other.total_tokens
+        self.calls += other.calls
+
+    @classmethod
+    def from_response(cls, usage: Any) -> "Usage":
+        if usage is None:
+            return cls()
+        return cls(
+            prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+            completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+            total_tokens=getattr(usage, "total_tokens", 0) or 0,
+            calls=1,
+        )
 
 
 def _messages_to_dicts(messages: Iterable[Message | dict[str, Any]]) -> list[dict[str, Any]]:
@@ -63,6 +90,8 @@ class ChatClient:
             base_url=base_url,
             timeout=timeout,
         )
+        self.last_usage: Usage = Usage()
+        self.cumulative_usage: Usage = Usage()
 
     def complete(
         self,
@@ -72,6 +101,7 @@ class ChatClient:
         tool_choice: str | dict[str, Any] | None = None,
         temperature: float | None = None,
         response_format: dict[str, Any] | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> Any:
         """Return the raw ChatCompletion response."""
         kwargs: dict[str, Any] = {
@@ -89,7 +119,12 @@ class ChatClient:
             kwargs["response_format"] = response_format
         if self.extra_headers:
             kwargs["extra_headers"] = self.extra_headers
-        return self._client.chat.completions.create(**kwargs)
+        if extra_body is not None:
+            kwargs["extra_body"] = extra_body
+        res = self._client.chat.completions.create(**kwargs)
+        self.last_usage = Usage.from_response(getattr(res, "usage", None))
+        self.cumulative_usage.add(self.last_usage)
+        return res
 
     def complete_text(
         self,

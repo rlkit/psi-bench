@@ -55,7 +55,13 @@ class TurnStrategy(abc.ABC):
 
 
 class DirectStrategy(TurnStrategy):
-    """A single LLM call; may emit a tool call or a respond action."""
+    """A single LLM call; may emit a tool call or a respond action.
+
+    If the first completion produces neither a tool call nor any visible
+    ``content`` (e.g. Qwen3 exhausted its budget inside ``<think>``), we
+    retry once with thinking disabled and an explicit "commit to an action
+    now" nudge so the benchmark doesn't hang on empty assistant turns.
+    """
 
     def __init__(self, client: ChatClient) -> None:
         self.client = client
@@ -71,6 +77,27 @@ class DirectStrategy(TurnStrategy):
         messages = _build_messages(trajectory, system_prompt)
         res = self.client.complete(messages, tools=tools or None)
         msg = res.choices[0].message
+        _record_reasoning(msg, trajectory)
+
+        if _is_empty_message(msg):
+            nudge = Message(
+                role="system",
+                content=(
+                    "Your previous turn produced no visible reply and no tool "
+                    "call. Commit to an action now: either call exactly one "
+                    "tool, or reply to the user in plain text. Do not think "
+                    "further — respond immediately."
+                ),
+            )
+            retry_messages = messages + [nudge]
+            res = self.client.complete(
+                retry_messages,
+                tools=tools or None,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+            msg = res.choices[0].message
+            _record_reasoning(msg, trajectory)
+
         action = _message_to_action(msg)
         trajectory.messages.append(_assistant_message(msg, action))
         return action
@@ -125,6 +152,7 @@ class ThinkingStrategy(TurnStrategy):
         ]
         res = self.client.complete(act_messages, tools=tools or None)
         msg = res.choices[0].message
+        _record_reasoning(msg, trajectory)
         action = _message_to_action(msg)
         trajectory.messages.append(_assistant_message(msg, action))
         return action
@@ -182,6 +210,7 @@ class TeacherStudentStrategy(TurnStrategy):
         ]
         res = self.student.complete(student_messages, tools=tools or None)
         msg = res.choices[0].message
+        _record_reasoning(msg, trajectory)
         action = _message_to_action(msg)
         trajectory.messages.append(_assistant_message(msg, action))
         return action
@@ -196,6 +225,20 @@ def _build_messages(trajectory: Trajectory, system_prompt: str) -> list[Message]
     msgs: list[Message] = [Message(role="system", content=system_prompt)]
     msgs.extend(trajectory.messages)
     return msgs
+
+
+def _is_empty_message(msg: Any) -> bool:
+    """True if the model emitted neither visible content nor a tool call."""
+    tool_calls = getattr(msg, "tool_calls", None) or []
+    content = getattr(msg, "content", None) or ""
+    return not tool_calls and not content.strip()
+
+
+def _record_reasoning(msg: Any, trajectory: Trajectory) -> None:
+    """Stash a reasoning-parser's ``reasoning_content`` on the current turn."""
+    reasoning = getattr(msg, "reasoning_content", None)
+    if reasoning:
+        trajectory.record_thought(f"[agent reasoning] {reasoning}")
 
 
 def _message_to_action(msg: Any) -> Action:
