@@ -26,11 +26,29 @@ dependencies = [
     "pydantic>=2.6.0",
     "httpx>=0.27.0",
     "typing-extensions>=4.9.0",
-    "sglang>=0.5.9",
     "matplotlib>=3.10.8",
 ]
 
 [project.optional-dependencies]
+serve = [
+    "sglang>=0.5.9 ; sys_platform == 'linux'",
+]
+# GPU-specific extras. Pick one based on your node:
+#   uv sync --extra h100   # Hopper (H100/H200)
+#   uv sync --extra a100   # Ampere (A100)
+#   uv sync --extra l40    # Ada (L40/L40S/4090)
+h100 = [
+    "sglang>=0.5.9 ; sys_platform == 'linux'",
+    "flashinfer-python>=0.2.0 ; sys_platform == 'linux'",
+]
+a100 = [
+    "sglang>=0.5.9 ; sys_platform == 'linux'",
+    "flashinfer-python>=0.2.0 ; sys_platform == 'linux'",
+]
+l40 = [
+    "sglang>=0.5.9 ; sys_platform == 'linux'",
+    "flashinfer-python>=0.2.0 ; sys_platform == 'linux'",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
